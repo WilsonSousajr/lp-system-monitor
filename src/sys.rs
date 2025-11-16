@@ -48,7 +48,7 @@ impl SysCache {
         let avail = self.sys.available_memory();
         self.total_mem_bytes = total;
         self.used_mem_bytes = total.saturating_sub(avail);
-        self.uptime_secs = self.sys.uptime();
+        self.uptime_secs = System::uptime();
         self.procs = top_processes(&self.sys, 8);
     }
 
