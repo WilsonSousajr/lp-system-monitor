@@ -1,4 +1,4 @@
-use sysinfo::{CpuRefreshKind, PidExt, Process, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Process, ProcessRefreshKind, RefreshKind, System};
 
 #[derive(Clone, Debug)]
 pub struct ProcessInfo {
@@ -21,7 +21,7 @@ impl SysCache {
     pub fn new() -> Self {
         let refresh = RefreshKind::new()
             .with_cpu(CpuRefreshKind::everything())
-            .with_memory()
+            .with_memory(MemoryRefreshKind::everything())
             .with_processes(ProcessRefreshKind::everything());
         let mut sys = System::new_with_specifics(refresh);
         sys.refresh_all();
@@ -118,68 +118,5 @@ pub fn format_duration_secs(total_secs: u64) -> String {
         format!("{:02}h {:02}m {:02}s", hours, mins, secs)
     } else {
         format!("{:02}m {:02}s", mins, secs)
-    }
-}
-use sysinfo::{
-    CpuRefreshKind, PidExt, Process, ProcessRefreshKind, RefreshKind, System,
-};
-
-#[derive(Debug, Clone)]
-pub struct ProcessInfo {
-    pub pid: u32,
-    pub name: String,
-    pub cpu: f32,
-    pub memory: u64,
-}
-
-pub struct App {
-    pub sys: System,
-    pub uptime_secs: u64,
-    pub processes: Vec<ProcessInfo>,
-}
-
-impl App {
-    pub fn new() -> Self {
-        let mut sys = System::new();
-        let refresh = RefreshKind::new()
-            .with_cpu(CpuRefreshKind::new())
-            .with_memory()
-            .with_processes(ProcessRefreshKind::new());
-        sys.refresh_specifics(refresh);
-
-        let mut app = Self {
-            sys,
-            uptime_secs: 0,
-            processes: Vec::new(),
-        };
-        app.refresh();
-        app
-    }
-
-    pub fn refresh(&mut self) {
-        let refresh = RefreshKind::new()
-            .with_cpu(CpuRefreshKind::new())
-            .with_memory()
-            .with_processes(ProcessRefreshKind::new());
-        self.sys.refresh_specifics(refresh);
-
-        self.uptime_secs = self.sys.uptime();
-
-        self.processes.clear();
-        for (_, proc) in self.sys.processes() {
-            self.processes.push(process_to_info(proc));
-        }
-        self.processes
-            .sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
-    }
-}
-
-fn process_to_info(proc: &Process) -> ProcessInfo {
-    let pid = proc.pid().as_u32();
-    ProcessInfo {
-        pid,
-        name: proc.name().to_string(),
-        cpu: proc.cpu_usage(),
-        memory: proc.memory(),
     }
 }
