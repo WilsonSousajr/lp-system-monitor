@@ -1,5 +1,5 @@
 use sysinfo::{
-    Component, Components, CpuRefreshKind, Disk, Disks, MemoryRefreshKind, Networks, Pid, Process,
+    Components, CpuRefreshKind, Disks, MemoryRefreshKind, Networks, Pid,
     ProcessRefreshKind, RefreshKind, System, Users,
 };
 
@@ -23,6 +23,7 @@ pub struct DiskInfo {
 
 pub struct SysCache {
     sys: System,
+    users: Users,
     networks: Networks,
     disks: Disks,
     components: Components, // For battery/temp
@@ -48,8 +49,8 @@ impl SysCache {
             .with_processes(ProcessRefreshKind::everything());
         
         let mut sys = System::new_with_specifics(refresh);
-        sys.refresh_users_list(); // Load users for process mapping
-
+        
+        let users = Users::new_with_refreshed_list();
         let networks = Networks::new_with_refreshed_list();
         let disks = Disks::new_with_refreshed_list();
         let components = Components::new_with_refreshed_list();
@@ -60,6 +61,7 @@ impl SysCache {
 
         let mut s = Self {
             sys,
+            users,
             networks,
             disks,
             components,
@@ -111,7 +113,7 @@ impl SysCache {
         self.prev_tx = current_tx;
 
         // Processes
-        self.procs = top_processes(&self.sys);
+        self.procs = top_processes(&self.sys, &self.users);
     }
 
     pub fn kill_process(&self, pid: u32) {
@@ -145,10 +147,10 @@ impl SysCache {
     }
 }
 
-fn top_processes(sys: &System) -> Vec<ProcessInfo> {
+fn top_processes(sys: &System, users: &Users) -> Vec<ProcessInfo> {
     let mut v: Vec<ProcessInfo> = sys.processes().values().map(|p| {
         let user = p.user_id()
-            .and_then(|uid| sys.get_user_by_id(uid))
+            .and_then(|uid| users.get_user_by_id(uid))
             .map(|u| u.name().to_string())
             .unwrap_or_else(|| "root".to_string());
 
