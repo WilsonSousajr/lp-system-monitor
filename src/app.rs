@@ -49,10 +49,10 @@ impl App {
         self.cpu_history.push(self.sys.cpu_global as u64);
 
         self.net_rx_history.remove(0);
-        self.net_rx_history.push(self.sys.rx_bytes);
+        self.net_rx_history.push(self.sys.rx_rate); // Use rate
         
         self.net_tx_history.remove(0);
-        self.net_tx_history.push(self.sys.tx_bytes);
+        self.net_tx_history.push(self.sys.tx_rate); // Use rate
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {

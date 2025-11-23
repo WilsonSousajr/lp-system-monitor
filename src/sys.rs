@@ -1,12 +1,13 @@
 use sysinfo::{
     Component, Components, CpuRefreshKind, Disk, Disks, MemoryRefreshKind, Networks, Pid, Process,
-    ProcessRefreshKind, RefreshKind, System,
+    ProcessRefreshKind, RefreshKind, System, Users,
 };
 
 #[derive(Clone, Debug)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub name: String,
+    pub user: String, // Added field
     pub cmd: String, // Path/Command
     pub cpu: f32,
     pub mem_bytes: u64,
@@ -31,8 +32,11 @@ pub struct SysCache {
     pub total_mem: u64,
     pub used_mem: u64,
     pub uptime: u64,
-    pub rx_bytes: u64,
-    pub tx_bytes: u64,
+    // Network rates
+    pub rx_rate: u64,
+    pub tx_rate: u64,
+    prev_rx: u64,
+    prev_tx: u64,
     procs: Vec<ProcessInfo>,
 }
 
@@ -44,6 +48,8 @@ impl SysCache {
             .with_processes(ProcessRefreshKind::everything());
         
         let mut sys = System::new_with_specifics(refresh);
+        sys.refresh_users_list(); // Load users for process mapping
+
         let networks = Networks::new_with_refreshed_list();
         let disks = Disks::new_with_refreshed_list();
         let components = Components::new_with_refreshed_list();
@@ -63,8 +69,10 @@ impl SysCache {
             total_mem: 0,
             used_mem: 0,
             uptime: 0,
-            rx_bytes: 0,
-            tx_bytes: 0,
+            rx_rate: 0,
+            tx_rate: 0,
+            prev_rx: 0,
+            prev_tx: 0,
             procs: Vec::new(),
         };
         s.refresh();
@@ -88,10 +96,19 @@ impl SysCache {
         self.used_mem = self.total_mem.saturating_sub(self.sys.available_memory());
         self.uptime = System::uptime();
 
-        // Network (Sum of all interfaces for simplicity, or pick specific)
-        let (rx, tx) = self.networks.iter().fold((0, 0), |acc, (_, n)| (acc.0 + n.received(), acc.1 + n.transmitted()));
-        self.rx_bytes = rx;
-        self.tx_bytes = tx;
+        // Network Rate Calculation
+        let (current_rx, current_tx) = self.networks.iter().fold((0, 0), |acc, (_, n)| (acc.0 + n.total_received(), acc.1 + n.total_transmitted()));
+        
+        // Calculate diff. If prev is 0 (first run), rate is 0 to avoid spikes.
+        if self.prev_rx > 0 {
+            self.rx_rate = current_rx.saturating_sub(self.prev_rx);
+        }
+        if self.prev_tx > 0 {
+            self.tx_rate = current_tx.saturating_sub(self.prev_tx);
+        }
+
+        self.prev_rx = current_rx;
+        self.prev_tx = current_tx;
 
         // Processes
         self.procs = top_processes(&self.sys);
@@ -129,12 +146,20 @@ impl SysCache {
 }
 
 fn top_processes(sys: &System) -> Vec<ProcessInfo> {
-    let mut v: Vec<ProcessInfo> = sys.processes().values().map(|p| ProcessInfo {
-        pid: p.pid().as_u32(),
-        name: p.name().to_string(),
-        cmd: p.exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        cpu: p.cpu_usage(),
-        mem_bytes: p.memory(),
+    let mut v: Vec<ProcessInfo> = sys.processes().values().map(|p| {
+        let user = p.user_id()
+            .and_then(|uid| sys.get_user_by_id(uid))
+            .map(|u| u.name().to_string())
+            .unwrap_or_else(|| "root".to_string());
+
+        ProcessInfo {
+            pid: p.pid().as_u32(),
+            name: p.name().to_string(),
+            user,
+            cmd: p.exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            cpu: p.cpu_usage(),
+            mem_bytes: p.memory(),
+        }
     }).collect();
     // Sort by CPU descending
     v.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
