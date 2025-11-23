@@ -1,4 +1,4 @@
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Process, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, Process, ProcessRefreshKind, RefreshKind, System};
 
 #[derive(Clone, Debug)]
 pub struct ProcessInfo {
@@ -49,7 +49,13 @@ impl SysCache {
         self.total_mem_bytes = total;
         self.used_mem_bytes = total.saturating_sub(avail);
         self.uptime_secs = System::uptime();
-        self.procs = top_processes(&self.sys, 8);
+        self.procs = top_processes(&self.sys, 30);
+    }
+
+    pub fn kill_process(&self, pid: u32) {
+        if let Some(process) = self.sys.process(Pid::from_u32(pid)) {
+            process.kill();
+        }
     }
 
     pub fn cpu_percent(&self) -> f32 {

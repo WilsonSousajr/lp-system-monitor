@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table, Wrap},
     Frame,
 };
 
@@ -25,30 +25,36 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_summary(f: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
     let sys = app.sys();
-    let cpu = format!("{:.1}%", sys.cpu_percent());
-    let used = format_bytes(sys.used_mem_bytes());
-    let total = format_bytes(sys.total_mem_bytes());
-    let uptime = format_duration_secs(sys.uptime_secs());
 
-    let text = vec![
-        Line::from(vec![
-            Span::styled(" CPU: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(cpu),
-        ]),
-        Line::from(vec![
-            Span::styled(" Mem: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(format!("{} / {}", used, total)),
-        ]),
-        Line::from(vec![
-            Span::styled(" Uptime: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw(uptime),
-        ]),
-    ];
+    // CPU Gauge
+    let cpu_val = sys.cpu_percent();
+    let cpu_gauge = Gauge::default()
+        .block(Block::default().title(" CPU ").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Yellow))
+        .percent(cpu_val as u16);
+    f.render_widget(cpu_gauge, chunks[0]);
 
-    let block = Block::default().title(" System ").borders(Borders::ALL);
-    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
-    f.render_widget(p, area);
+    // Memory Gauge
+    let used = sys.used_mem_bytes();
+    let total = sys.total_mem_bytes();
+    let mem_percent = if total > 0 {
+        (used as f64 / total as f64 * 100.0) as u16
+    } else {
+        0
+    };
+    let mem_label = format!("{}/{}", format_bytes(used), format_bytes(total));
+    let mem_gauge = Gauge::default()
+        .block(Block::default().title(" Memory ").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Cyan))
+        .percent(mem_percent)
+        .label(mem_label);
+    f.render_widget(mem_gauge, chunks[1]);
 }
 
 fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
@@ -77,19 +83,19 @@ fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
     ])
     .header(headers)
     .block(Block::default().title(" Top Processes ").borders(Borders::ALL))
-    .highlight_style(Style::default().bg(Color::Blue).fg(Color::Black));
+    .highlight_style(Style::default().bg(Color::White).fg(Color::Black).add_modifier(Modifier::BOLD));
 
-    f.render_widget(table, area);
+    f.render_stateful_widget(table, area, &mut app.table_state.clone());
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(" q ", Style::default().bg(Color::DarkGray).fg(Color::White)),
         Span::raw(" quit  "),
-        Span::styled(" Ctrl-C ", Style::default().bg(Color::DarkGray).fg(Color::White)),
-        Span::raw(" quit  "),
-        Span::styled(" Esc ", Style::default().bg(Color::DarkGray).fg(Color::White)),
-        Span::raw(" quit"),
+        Span::styled(" \u{2191}/\u{2193} ", Style::default().bg(Color::DarkGray).fg(Color::White)),
+        Span::raw(" select  "),
+        Span::styled(" k ", Style::default().bg(Color::Red).fg(Color::White)),
+        Span::raw(" kill process"),
     ]);
     let p = Paragraph::new(line)
         .block(Block::default().borders(Borders::TOP))
