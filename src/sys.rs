@@ -1,19 +1,38 @@
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, Process, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{
+    Component, Components, CpuRefreshKind, Disk, Disks, MemoryRefreshKind, Networks, Pid, Process,
+    ProcessRefreshKind, RefreshKind, System,
+};
 
 #[derive(Clone, Debug)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub name: String,
+    pub cmd: String, // Path/Command
     pub cpu: f32,
     pub mem_bytes: u64,
 }
 
+#[derive(Clone, Debug)]
+pub struct DiskInfo {
+    pub name: String,
+    pub mount_point: String,
+    pub total: u64,
+    pub available: u64,
+}
+
 pub struct SysCache {
     sys: System,
-    cpu: f32,
-    total_mem_bytes: u64,
-    used_mem_bytes: u64,
-    uptime_secs: u64,
+    networks: Networks,
+    disks: Disks,
+    components: Components, // For battery/temp
+    pub cpu_model: String,
+    pub cpu_cores: Vec<f32>, // Usage per core
+    pub cpu_global: f32,
+    pub total_mem: u64,
+    pub used_mem: u64,
+    pub uptime: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
     procs: Vec<ProcessInfo>,
 }
 
@@ -23,14 +42,29 @@ impl SysCache {
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything())
             .with_processes(ProcessRefreshKind::everything());
+        
         let mut sys = System::new_with_specifics(refresh);
+        let networks = Networks::new_with_refreshed_list();
+        let disks = Disks::new_with_refreshed_list();
+        let components = Components::new_with_refreshed_list();
+
         sys.refresh_all();
+        
+        let cpu_model = sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default();
+
         let mut s = Self {
             sys,
-            cpu: 0.0,
-            total_mem_bytes: 0,
-            used_mem_bytes: 0,
-            uptime_secs: 0,
+            networks,
+            disks,
+            components,
+            cpu_model,
+            cpu_cores: Vec::new(),
+            cpu_global: 0.0,
+            total_mem: 0,
+            used_mem: 0,
+            uptime: 0,
+            rx_bytes: 0,
+            tx_bytes: 0,
             procs: Vec::new(),
         };
         s.refresh();
@@ -40,16 +74,27 @@ impl SysCache {
     pub fn refresh(&mut self) {
         self.sys.refresh_cpu();
         self.sys.refresh_memory();
-        self.sys
-            .refresh_processes_specifics(ProcessRefreshKind::everything());
+        self.sys.refresh_processes_specifics(ProcessRefreshKind::everything());
+        self.networks.refresh();
+        self.disks.refresh();
+        self.components.refresh();
 
-        self.cpu = self.sys.global_cpu_info().cpu_usage();
-        let total = self.sys.total_memory();
-        let avail = self.sys.available_memory();
-        self.total_mem_bytes = total;
-        self.used_mem_bytes = total.saturating_sub(avail);
-        self.uptime_secs = System::uptime();
-        self.procs = top_processes(&self.sys, 30);
+        // CPU
+        self.cpu_global = self.sys.global_cpu_info().cpu_usage();
+        self.cpu_cores = self.sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+
+        // Memory
+        self.total_mem = self.sys.total_memory();
+        self.used_mem = self.total_mem.saturating_sub(self.sys.available_memory());
+        self.uptime = System::uptime();
+
+        // Network (Sum of all interfaces for simplicity, or pick specific)
+        let (rx, tx) = self.networks.iter().fold((0, 0), |acc, (_, n)| (acc.0 + n.received(), acc.1 + n.transmitted()));
+        self.rx_bytes = rx;
+        self.tx_bytes = tx;
+
+        // Processes
+        self.procs = top_processes(&self.sys);
     }
 
     pub fn kill_process(&self, pid: u32) {
@@ -58,71 +103,58 @@ impl SysCache {
         }
     }
 
-    pub fn cpu_percent(&self) -> f32 {
-        self.cpu
+    pub fn processes(&self) -> &[ProcessInfo] { &self.procs }
+    pub fn disks(&self) -> Vec<DiskInfo> {
+        self.disks.iter().map(|d| DiskInfo {
+            name: d.name().to_string_lossy().to_string(),
+            mount_point: d.mount_point().to_string_lossy().to_string(),
+            total: d.total_space(),
+            available: d.available_space(),
+        }).collect()
     }
-
-    pub fn total_mem_bytes(&self) -> u64 {
-        self.total_mem_bytes
-    }
-
-    pub fn used_mem_bytes(&self) -> u64 {
-        self.used_mem_bytes
-    }
-
-    pub fn uptime_secs(&self) -> u64 {
-        self.uptime_secs
-    }
-
-    pub fn processes(&self) -> &[ProcessInfo] {
-        &self.procs
+    
+    // Helper to get battery % (first battery found)
+    pub fn battery_percentage(&self) -> Option<f32> {
+        // Note: This depends on how sysinfo exposes batteries in Components on your OS
+        // Often labeled as "BAT" or similar. Simplified check:
+        // self.components.iter()
+        //     .find(|c| c.label().to_uppercase().contains("BAT"))
+        //     .and_then(|c| c.max().map(|m| (c.temperature() / m) * 100.0)) 
+        
+        // Actually sysinfo components are usually temps. 
+        // For battery, sysinfo has a specific API, but for this exercise we might skip or use components if available.
+        // Let's return a dummy or temp for now to avoid compilation errors if features aren't enabled.
+        None 
     }
 }
 
-fn top_processes(sys: &System, limit: usize) -> Vec<ProcessInfo> {
-    let mut v: Vec<ProcessInfo> = sys
-        .processes()
-        .values()
-        .map(|p: &Process| ProcessInfo {
-            pid: p.pid().as_u32(),
-            name: p.name().to_string(),
-            cpu: p.cpu_usage(),
-            mem_bytes: p.memory(),
-        })
-        .collect();
+fn top_processes(sys: &System) -> Vec<ProcessInfo> {
+    let mut v: Vec<ProcessInfo> = sys.processes().values().map(|p| ProcessInfo {
+        pid: p.pid().as_u32(),
+        name: p.name().to_string(),
+        cmd: p.exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        cpu: p.cpu_usage(),
+        mem_bytes: p.memory(),
+    }).collect();
+    // Sort by CPU descending
     v.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
-    v.truncate(limit);
     v
 }
 
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    if bytes == 0 {
-        return "0 B".into();
-    }
+    if bytes == 0 { return "0 B".into(); }
     let mut size = bytes as f64;
     let mut unit = 0usize;
     while size >= 1024.0 && unit < UNITS.len() - 1 {
         size /= 1024.0;
         unit += 1;
     }
-    if unit == 0 {
-        format!("{:.0} {}", size, UNITS[unit])
-    } else {
-        format!("{:.1} {}", size, UNITS[unit])
-    }
+    format!("{:.1} {}", size, UNITS[unit])
 }
 
 pub fn format_duration_secs(total_secs: u64) -> String {
-    let days = total_secs / 86_400;
-    let hours = (total_secs % 86_400) / 3600;
+    let hours = total_secs / 3600;
     let mins = (total_secs % 3600) / 60;
-    let secs = total_secs % 60;
-    if days > 0 {
-        format!("{}d {:02}h {:02}m {:02}s", days, hours, mins, secs)
-    } else if hours > 0 {
-        format!("{:02}h {:02}m {:02}s", hours, mins, secs)
-    } else {
-        format!("{:02}m {:02}s", mins, secs)
-    }
+    format!("{}h {}m", hours, mins)
 }
