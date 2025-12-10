@@ -1,25 +1,37 @@
-use crossterm::event::{self, Event as CEvent, KeyEvent, KeyEventKind};
-use std::sync::mpsc::{self, Receiver};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy)]
+/// Terminal events.
+#[derive(Clone, Copy, Debug)]
 pub enum Event {
-    Input(KeyEvent),
+    /// Terminal tick.
     Tick,
+    /// Key press.
+    Input(KeyEvent),
 }
 
-pub fn spawn_events(tick_rate: Duration) -> Receiver<Event> {
+/// Helper function to spawn the event loop.
+///
+/// Returns a receiver that will receive events from the event loop.
+pub fn spawn_events(tick_rate: Duration) -> mpsc::Receiver<Event> {
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || loop {
-        if event::poll(tick_rate).unwrap_or(false) {
-            if let Ok(CEvent::Key(key)) = event::read() {
-                if key.kind == KeyEventKind::Press {
-                    let _ = tx.send(Event::Input(key));
+    
+    // Input thread
+    let event_tx = tx.clone();
+    thread::spawn(move || {
+        loop {
+            // Poll for events
+            if event::poll(tick_rate).unwrap() {
+                if let CrosstermEvent::Key(key) = event::read().unwrap() {
+                    event_tx.send(Event::Input(key)).unwrap();
                 }
             }
+            // Send tick event
+            event_tx.send(Event::Tick).unwrap();
         }
-        let _ = tx.send(Event::Tick);
     });
+
     rx
 }
