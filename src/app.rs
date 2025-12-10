@@ -75,6 +75,7 @@ impl App {
                 KeyCode::Char('k') => self.try_kill(), // Open modal
                 KeyCode::Char('/') => self.input_mode = InputMode::Editing, // Enter search mode
                 KeyCode::Tab | KeyCode::Char('s') => self.toggle_sort(),
+                KeyCode::Char('t') => self.toggle_tree_mode(),
                 KeyCode::Char('?') => self.open_help(),
                 _ => {}
             },
@@ -93,11 +94,20 @@ impl App {
         }
     }
 
+    fn toggle_tree_mode(&mut self) {
+        if self.sys.sort_by == ProcessSort::Tree {
+            self.sys.sort_by = ProcessSort::Cpu;
+        } else {
+            self.sys.sort_by = ProcessSort::Tree;
+        }
+    }
+
     fn toggle_sort(&mut self) {
         self.sys.sort_by = match self.sys.sort_by {
             ProcessSort::Cpu => ProcessSort::Memory,
             ProcessSort::Memory => ProcessSort::Pid,
             ProcessSort::Pid => ProcessSort::Cpu,
+            ProcessSort::Tree => ProcessSort::Cpu, // If we are in tree mode, 's' resets to CPU
         };
     }
 
