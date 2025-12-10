@@ -17,7 +17,6 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // Terminal setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -25,21 +24,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    // App and event loop
     let tick_rate = Duration::from_millis(1000);
     let mut app = App::new(tick_rate);
     let rx = spawn_events(tick_rate);
 
-    // Initial refresh so first draw has data
     app.on_tick();
 
     loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         match rx.recv() {
             Ok(AppEvent::Tick) => app.on_tick(),
             Ok(AppEvent::Input(key)) => {
-                // Also catch Ctrl-C quickly here
                 if matches!(
                     key,
                     KeyEvent {
@@ -53,7 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     app.on_key(key);
                 }
             }
-            Err(_) => break, // sender dropped; exit
+            Err(_) => break,
         }
 
         if app.should_quit() {
@@ -61,9 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Restore terminal
     disable_raw_mode()?;
-    // Safety: use backend's writer
     let mut out = io::stdout();
     execute!(out, LeaveAlternateScreen)?;
     terminal.show_cursor()?;

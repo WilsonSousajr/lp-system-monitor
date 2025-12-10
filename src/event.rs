@@ -12,10 +12,8 @@ pub enum Event {
 pub fn spawn_events(tick_rate: Duration) -> Receiver<Event> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || loop {
-        // Poll for either input or timeout (tick)
         if event::poll(tick_rate).unwrap_or(false) {
             if let Ok(CEvent::Key(key)) = event::read() {
-                // Only handle actual key presses (not repeats/releases)
                 if key.kind == KeyEventKind::Press {
                     let _ = tx.send(Event::Input(key));
                 }
