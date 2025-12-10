@@ -1,12 +1,13 @@
-use crate::app::{App, InputMode};
-use crate::sys::{format_bytes, format_duration_secs};
+use crate::app::{App, InputMode, PopupState};
+use crate::sys::{format_bytes, format_duration_secs, ProcessSort};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols,
     widgets::{
-        Axis, Block, BorderType, Borders, Cell, Chart, Dataset, Gauge, GraphType, Row, Sparkline, Table,
+        Axis, Block, BorderType, Borders, Cell, Chart, Clear, Dataset, Gauge, GraphType, Paragraph, Row, Sparkline, Table,
     },
+    layout::Alignment,
     Frame,
 };
 
@@ -43,6 +44,70 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_network_module(f, left_chunks[1], app);
     draw_disk_module(f, bottom_chunks[1], app);
     draw_processes_module(f, bottom_chunks[2], app);
+
+    // Draw popup if needed
+    if let PopupState::None = app.popup {
+        // No popup
+    } else {
+        draw_popup(f, app);
+    }
+}
+
+fn draw_popup(f: &mut Frame, app: &App) {
+    let area = f.size();
+    
+    let text = match &app.popup {
+        PopupState::Kill { pid, name } => vec![
+            format!("Are you sure you want to kill process {} ({})?", pid, name),
+            "Press 'Y' to confirm, 'N' to cancel".to_string(),
+        ],
+        PopupState::Help => vec![
+            "Help Menu".to_string(),
+            "".to_string(),
+            "k: Kill Process".to_string(),
+            "s/Tab: Toggle Sort (Cpu/Mem)".to_string(),
+            "/: Search Process".to_string(),
+            "?: Toggle Help".to_string(),
+            "Esc: Close Popup / Clear Search".to_string(),
+            "q: Quit".to_string(),
+        ],
+        _ => return,
+    };
+    
+    // Centered float
+    let width = 60;
+    let height = text.len() as u16 + 4;
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - 40) / 2),
+            Constraint::Length(height),
+            Constraint::Percentage((100 - 40) / 2),
+        ])
+        .split(area);
+
+    let popup_area = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - 40) / 2),
+            Constraint::Length(width),
+            Constraint::Percentage((100 - 40) / 2),
+        ])
+        .split(popup_layout[1])[1];
+
+    f.render_widget(Clear, popup_area);
+    
+    let title = match app.popup {
+         PopupState::Kill{..} => " Confirm Kill ",
+         PopupState::Help => " Help ",
+         _ => "",
+    };
+
+    let p = Paragraph::new(text.join("\n"))
+        .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
+        .alignment(Alignment::Center);
+    
+    f.render_widget(p, popup_area);
 }
 
 fn get_color(percent: f32) -> Color {
@@ -177,10 +242,17 @@ fn draw_disk_module(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn draw_processes_module(f: &mut Frame, area: Rect, app: &App) {
+pub fn draw_processes_module(f: &mut Frame, area: Rect, app: &App) {
+    let sort_label = match app.sys().sort_by {
+        ProcessSort::Cpu => "Sort: CPU",
+        ProcessSort::Memory => "Sort: Mem",
+        ProcessSort::Pid => "Sort: PID",
+    };
+
     let title = match app.input_mode {
-        InputMode::Normal => format!(" Processes (Press '/' to search) "),
+        InputMode::Normal => format!(" Processes (Press '/' search, '?' help) [{}] ", sort_label),
         InputMode::Editing => format!(" Search: {}_ ", app.search_query),
+        InputMode::Popup => format!(" Processes (Popup Active) "),
     };
 
     let block = Block::default()

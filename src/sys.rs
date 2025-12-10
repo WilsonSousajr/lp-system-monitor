@@ -21,6 +21,13 @@ pub struct DiskInfo {
     pub available: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ProcessSort {
+    Cpu,
+    Memory,
+    Pid,
+}
+
 pub struct SysCache {
     sys: System,
     users: Users,
@@ -39,6 +46,7 @@ pub struct SysCache {
     prev_rx: u64,
     prev_tx: u64,
     procs: Vec<ProcessInfo>,
+    pub sort_by: ProcessSort,
 }
 
 impl SysCache {
@@ -76,6 +84,7 @@ impl SysCache {
             prev_rx: 0,
             prev_tx: 0,
             procs: Vec::new(),
+            sort_by: ProcessSort::Cpu,
         };
         s.refresh();
         s
@@ -113,7 +122,7 @@ impl SysCache {
         self.prev_tx = current_tx;
 
         // Processes
-        self.procs = top_processes(&self.sys, &self.users);
+        self.procs = top_processes(&self.sys, &self.users, self.sort_by);
     }
 
     pub fn kill_process(&self, pid: u32) {
@@ -134,20 +143,11 @@ impl SysCache {
     
     // Helper to get battery % (first battery found)
     pub fn battery_percentage(&self) -> Option<f32> {
-        // Note: This depends on how sysinfo exposes batteries in Components on your OS
-        // Often labeled as "BAT" or similar. Simplified check:
-        // self.components.iter()
-        //     .find(|c| c.label().to_uppercase().contains("BAT"))
-        //     .and_then(|c| c.max().map(|m| (c.temperature() / m) * 100.0)) 
-        
-        // Actually sysinfo components are usually temps. 
-        // For battery, sysinfo has a specific API, but for this exercise we might skip or use components if available.
-        // Let's return a dummy or temp for now to avoid compilation errors if features aren't enabled.
         None 
     }
 }
 
-fn top_processes(sys: &System, users: &Users) -> Vec<ProcessInfo> {
+fn top_processes(sys: &System, users: &Users, sort_by: ProcessSort) -> Vec<ProcessInfo> {
     let mut v: Vec<ProcessInfo> = sys.processes().values().map(|p| {
         let user = p.user_id()
             .and_then(|uid| users.get_user_by_id(uid))
@@ -163,8 +163,13 @@ fn top_processes(sys: &System, users: &Users) -> Vec<ProcessInfo> {
             mem_bytes: p.memory(),
         }
     }).collect();
-    // Sort by CPU descending
-    v.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
+    
+    // Sort
+    match sort_by {
+        ProcessSort::Cpu => v.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal)),
+        ProcessSort::Memory => v.sort_by(|a, b| b.mem_bytes.cmp(&a.mem_bytes)),
+        ProcessSort::Pid => v.sort_by(|a, b| a.pid.cmp(&b.pid)),
+    }
     v
 }
 

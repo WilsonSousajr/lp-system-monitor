@@ -1,11 +1,19 @@
-use crate::sys::SysCache;
+use crate::sys::{SysCache, ProcessSort};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 use std::time::Duration;
 
+#[derive(Clone)]
+pub enum PopupState {
+    None,
+    Help,
+    Kill { pid: u32, name: String },
+}
+
 pub enum InputMode {
     Normal,
     Editing,
+    Popup,
 }
 
 pub struct App {
@@ -22,6 +30,7 @@ pub struct App {
     // Search/Filter
     pub search_query: String,
     pub input_mode: InputMode,
+    pub popup: PopupState,
 }
 
 impl App {
@@ -38,6 +47,7 @@ impl App {
             net_tx_history: vec![0; 100],
             search_query: String::new(),
             input_mode: InputMode::Normal,
+            popup: PopupState::None,
         }
     }
 
@@ -62,8 +72,10 @@ impl App {
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.should_quit = true,
                 KeyCode::Down => self.next(),
                 KeyCode::Up => self.previous(),
-                KeyCode::Char('k') => self.kill(),
+                KeyCode::Char('k') => self.try_kill(), // Open modal
                 KeyCode::Char('/') => self.input_mode = InputMode::Editing, // Enter search mode
+                KeyCode::Tab | KeyCode::Char('s') => self.toggle_sort(),
+                KeyCode::Char('?') => self.open_help(),
                 _ => {}
             },
             InputMode::Editing => match key.code {
@@ -72,38 +84,94 @@ impl App {
                 KeyCode::Backspace => { self.search_query.pop(); },
                 KeyCode::Char(c) => { self.search_query.push(c); },
                 _ => {}
+            },
+            InputMode::Popup => match key.code {
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => self.close_popup(),
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_popup(),
+                _ => {}
             }
         }
     }
 
+    fn toggle_sort(&mut self) {
+        self.sys.sort_by = match self.sys.sort_by {
+            ProcessSort::Cpu => ProcessSort::Memory,
+            ProcessSort::Memory => ProcessSort::Pid,
+            ProcessSort::Pid => ProcessSort::Cpu,
+        };
+    }
+
+    fn open_help(&mut self) {
+        self.popup = PopupState::Help;
+        self.input_mode = InputMode::Popup;
+    }
+
+    fn try_kill(&mut self) {
+        // Get selected PID logic
+        // We need to find the actual PID from the filtered list (if searching) or full list.
+        // For simplicity reusing the logic from drawing (filtering) might be expensive here?
+        // Let's replicate the filter logic or just assume no filter for now? 
+        // Actually, we should be consistent. The UI displays filtered list.
+        // We will do a quick filter here to find the correct process.
+        
+        let query = self.search_query.to_lowercase();
+        let processes: Vec<_> = self.sys.processes().iter()
+            .filter(|p| p.name.to_lowercase().contains(&query) || p.pid.to_string().contains(&query))
+            .collect();
+
+        if let Some(i) = self.table_state.selected() {
+            if let Some(proc) = processes.get(i) {
+                 self.popup = PopupState::Kill { pid: proc.pid, name: proc.name.clone() };
+                 self.input_mode = InputMode::Popup;
+            }
+        }
+    }
+
+    fn confirm_popup(&mut self) {
+        if let PopupState::Kill { pid, .. } = self.popup {
+            self.sys.kill_process(pid);
+        }
+        self.close_popup();
+    }
+
+    fn close_popup(&mut self) {
+        self.popup = PopupState::None;
+        self.input_mode = InputMode::Normal;
+    }
+
     fn next(&mut self) {
-        // Logic needs to account for filtered list size, handled in UI or here. 
-        // For simplicity, we just increment, but UI might show fewer items.
+        // Replicating filter for bounds
+        let query = self.search_query.to_lowercase();
+        let count = self.sys.processes().iter()
+            .filter(|p| p.name.to_lowercase().contains(&query) || p.pid.to_string().contains(&query))
+            .count();
+            
+        if count == 0 { return; }
+
         let i = match self.table_state.selected() {
-            Some(i) => i + 1,
+            Some(i) => if i >= count - 1 { 0 } else { i + 1 },
             None => 0,
         };
         self.table_state.select(Some(i));
     }
 
     fn previous(&mut self) {
+        let query = self.search_query.to_lowercase();
+        let count = self.sys.processes().iter()
+            .filter(|p| p.name.to_lowercase().contains(&query) || p.pid.to_string().contains(&query))
+            .count();
+        
+        if count == 0 { return; }
+
         let i = match self.table_state.selected() {
-            Some(i) => if i == 0 { 0 } else { i - 1 },
+            Some(i) => if i == 0 { count - 1 } else { i - 1 },
             None => 0,
         };
         self.table_state.select(Some(i));
     }
 
-    fn kill(&mut self) {
-        // Note: This kills based on the *full* list index. 
-        // If filtering is active, this logic needs to map visual index to actual PID.
-        // For this snippet, we assume the user clears search before killing or we implement mapping later.
-        if let Some(i) = self.table_state.selected() {
-            if let Some(proc) = self.sys.processes().get(i) {
-                self.sys.kill_process(proc.pid);
-            }
-        }
-    }
+    // Removing old kill method as it's replaced by try_kill and confirm_popup
+    // pub fn kill(&mut self) { ... }
 
     pub fn request_quit(&mut self) { self.should_quit = true; }
     pub fn should_quit(&self) -> bool { self.should_quit }
